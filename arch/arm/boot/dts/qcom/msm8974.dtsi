@@ -78,7 +78,7 @@
 
 		adsp_mem: adsp_region@0 {
 			linux,reserve-contiguous-region;
-			reg = <0 0x3F00000>;
+			reg = <0 0x4100000>;
 			label = "adsp_mem";
 		};
 
@@ -91,8 +91,8 @@
 		audio_mem: audio_region@0 {
 			linux,reserve-contiguous-region;
 			linux,reserve-region;
-			reg = <0 0x614000>;
-			lable = "audio_mem";
+			reg = <0 0xC04000>;
+			label = "audio_mem";
 		};
 	};
 
@@ -2048,6 +2048,7 @@
 		gpios = <&msmgpio 36 0>, <&msmgpio 37 0>, <&msmgpio 38 0>, <&msmgpio 39 0>, <&msmgpio 40 0>;
 		qcom,has-48mhz-xo;
 		qcom,has-pronto-hw;
+		qcom,wcnss-pm = <11 19 1200 1 1 6>;
 	};
 
 	qcom,ocmem@fdd00000 {
