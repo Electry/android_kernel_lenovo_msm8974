@@ -9,7 +9,8 @@
 DEFCONFIG=kingdom_row_defconfig
 THREADS=4
 
-TOOLCHAIN_PATH=~/android/toolchains/arm-eabi-4.8/bin/arm-eabi-
+# android-7.0.0
+TOOLCHAIN_PATH=~/android/toolchains/arm-linux-androideabi-4.9/bin/arm-linux-androidkernel-
 TOOLS_PATH=~/bin
 
 BOOT_PATH=arch/arm/boot
