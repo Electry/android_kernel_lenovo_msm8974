@@ -26,14 +26,12 @@
 #include <linux/msm_tsens.h>
 #include <linux/msm_thermal.h>
 #include <asm/mach/map.h>
-#include <asm/hardware/gic.h>
-#include <asm/mach/map.h>
 #include <asm/mach/arch.h>
 #include <mach/board.h>
 #include <mach/gpiomux.h>
 #include <mach/msm_iomap.h>
 #ifdef CONFIG_ION_MSM
-#include <mach/ion.h>
+#include <linux/ion.h>
 #endif
 #include <mach/msm_memtypes.h>
 #include <mach/msm_smd.h>
@@ -53,8 +51,6 @@
 /* Tony Sun, 2013.9.24, For WIFI/BT read MAC from NV, END */
 
 /* hall sensor start */
-#include <linux/kernel.h>
-#include <linux/platform_device.h>
 
 static struct platform_device msm_hall_switch = {
 	.name      = "msm_hall_switch",
@@ -70,38 +66,15 @@ void __init msm_hall_init(void)
 }
 /* hall sensor end */
 
-static struct memtype_reserve msm8974_reserve_table[] __initdata = {
-	[MEMTYPE_SMI] = {
-	},
-	[MEMTYPE_EBI0] = {
-		.flags	=	MEMTYPE_FLAGS_1M_ALIGN,
-	},
-	[MEMTYPE_EBI1] = {
-		.flags	=	MEMTYPE_FLAGS_1M_ALIGN,
-	},
-};
-
-static int msm8974_paddr_to_memtype(phys_addr_t paddr)
-{
-	return MEMTYPE_EBI1;
-}
-
-static struct reserve_info msm8974_reserve_info __initdata = {
-	.memtype_reserve_table = msm8974_reserve_table,
-	.paddr_to_memtype = msm8974_paddr_to_memtype,
-};
 
 void __init msm_8974_reserve(void)
 {
-	reserve_info = &msm8974_reserve_info;
-	of_scan_flat_dt(dt_scan_for_memory_reserve, msm8974_reserve_table);
-	msm_reserve();
+	of_scan_flat_dt(dt_scan_for_memory_reserve, NULL);
 }
 
 static void __init msm8974_early_memory(void)
 {
-	reserve_info = &msm8974_reserve_info;
-	of_scan_flat_dt(dt_scan_for_memory_hole, msm8974_reserve_table);
+	of_scan_flat_dt(dt_scan_for_memory_hole, NULL);
 }
 
 /*
@@ -113,17 +86,19 @@ static void __init msm8974_early_memory(void)
 void __init msm8974_add_drivers(void)
 {
 	msm_smem_init();
-	msm_init_modem_notifier_list();
+	/* msm_init_modem_notifier_list(); */
 	msm_smd_init();
 	msm_rpm_driver_init();
 	msm_pm_sleep_status_init();
-	rpm_regulator_smd_driver_init();
+	rpm_smd_regulator_driver_init();
 	msm_spm_device_init();
 	krait_power_init();
+	/*
 	if (of_board_is_rumi())
 		msm_clock_init(&msm8974_rumi_clock_init_data);
 	else
 		msm_clock_init(&msm8974_clock_init_data);
+	*/
 	tsens_tm_init_driver();
 	msm_thermal_device_init();
 	msm_hall_init();
@@ -195,7 +170,7 @@ void __init msm8974_init(void)
 	msm8974_add_drivers();
 
 	/* Tony Sun, 2013.9.24, For WIFI/BT read MAC from NV, START */
-	lenovo_nv_init();
+	//lenovo_nv_init();
 	/* Tony Sun, 2013.9.24, For WIFI/BT read MAC from NV, END */
 }
 
@@ -212,10 +187,7 @@ static const char *msm8974_dt_match[] __initconst = {
 
 DT_MACHINE_START(MSM8974_DT, "Qualcomm MSM 8974 (Flattened Device Tree)")
 	.map_io = msm8974_map_io,
-	.init_irq = msm_dt_init_irq,
 	.init_machine = msm8974_init,
-	.handle_irq = gic_handle_irq,
-	.timer = &msm_dt_timer,
 	.dt_compat = msm8974_dt_match,
 	.reserve = msm_8974_reserve,
 	.init_very_early = msm8974_init_very_early,

@@ -19,12 +19,12 @@
 #include <linux/io.h>
 #include <linux/clk.h>
 #include <linux/regulator/consumer.h>
+#include <linux/regulator/rpm-smd-regulator.h>
 #include <linux/of.h>
 #include <linux/cpumask.h>
 
 #include <asm/cputype.h>
 
-#include <mach/rpm-regulator-smd.h>
 #include <mach/clk-provider.h>
 #include <mach/clock-generic.h>
 #include <mach/clk.h>
