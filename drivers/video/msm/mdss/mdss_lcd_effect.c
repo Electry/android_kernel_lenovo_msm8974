@@ -137,6 +137,10 @@ static struct dsi_cmd_desc *mdss_lcd_effect_copy_mode_code(
 	if (current_mode == 0) {
 		pr_debug("%s: %s: current is custom mode\n", TAG, __func__);
 
+		// Set mode
+		memcpy(lcd_data->buf + *cnt, mode_cmds, mode_cnt * sizeof (struct dsi_cmd_desc));
+		*cnt += mode_cnt;
+
 		// Update all effects
 		for (i = 0; i < lcd_data->effect_data->supported_effect; i++) {
 			mdss_lcd_effect_copy_effect_code(lcd_data, i, lcd_data->effect_data->effect[i].level, /*out*/cnt);
@@ -144,6 +148,12 @@ static struct dsi_cmd_desc *mdss_lcd_effect_copy_mode_code(
 	} else {
 		pr_debug("%s: %s: current is [%s]\n", TAG, __func__, mode->name);
 
+		// Reset all effects
+		for (i = 0; i < lcd_data->effect_data->supported_effect; i++) {
+			mdss_lcd_effect_copy_effect_code(lcd_data, i, /*reset*/0, /*out*/cnt);
+		}
+
+		// Set mode
 		memcpy(lcd_data->buf + *cnt, mode_cmds, mode_cnt * sizeof (struct dsi_cmd_desc));
 		*cnt += mode_cnt;
 	}
