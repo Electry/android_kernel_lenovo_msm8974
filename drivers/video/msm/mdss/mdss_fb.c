@@ -55,8 +55,6 @@
 #include "mdss_fb.h"
 #include "mdss_mdp_splash_logo.h"
 
-#include "mdss_livedisplay.h"
-
 #ifdef CONFIG_FB_MSM_MDSS_LCD_EFFECT
 #include "mdss_lcd_effect.h"
 #endif
@@ -547,7 +545,6 @@ static int mdss_fb_create_sysfs(struct msm_fb_data_type *mfd)
 	if (rc)
 		pr_err("sysfs group creation failed, rc=%d\n", rc);
 
-	rc = mdss_livedisplay_create_sysfs(mfd);
 #ifdef CONFIG_FB_MSM_MDSS_LCD_EFFECT
 	rc = mdss_lcd_effect_create_sysfs(mfd);
 #endif

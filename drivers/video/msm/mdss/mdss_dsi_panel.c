@@ -23,7 +23,6 @@
 #include <linux/err.h>
 
 #include "mdss_dsi.h"
-#include "mdss_livedisplay.h"
 
 #ifdef CONFIG_FB_MSM_MDSS_LCD_EFFECT
 #include "mdss_lcd_effect.h"
@@ -132,7 +131,7 @@ u32 mdss_dsi_panel_cmd_read(struct mdss_dsi_ctrl_pdata *ctrl, char cmd0,
 	return 0;
 }
 
-void mdss_dsi_panel_cmds_send(struct mdss_dsi_ctrl_pdata *ctrl,
+static void mdss_dsi_panel_cmds_send(struct mdss_dsi_ctrl_pdata *ctrl,
 			struct dsi_panel_cmds *pcmds)
 {
 	struct dcs_cmd_req cmdreq;
@@ -382,18 +381,6 @@ static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 	}
 }
 
-void mdss_dsi_panel_outdoor_set(struct mdss_dsi_ctrl_pdata *ctrl_pdata,
-		int on)
-{
-	if (gpio_is_valid(ctrl_pdata->bl_outdoor_gpio)) {
-		gpio_set_value(ctrl_pdata->bl_outdoor_gpio, on > 0 ? 1 : 0);
-		pr_info("%s: Set bl_outdoor_gpio val=%d", __func__, on > 0 ? 1 : 0);
-	}
-
-	return;
-
-}
-
 static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
 {
 	struct mipi_panel_info *mipi;
@@ -434,7 +421,8 @@ static int mdss_dsi_panel_off(struct mdss_panel_data *pdata)
 	if (gpio_is_valid(ctrl->disp_en_gpio))
 		gpio_set_value((ctrl->disp_en_gpio), 0);
 
-	mdss_dsi_panel_outdoor_set(ctrl, 0);
+	if (gpio_is_valid(ctrl->bl_outdoor_gpio))
+		gpio_set_value(ctrl->bl_outdoor_gpio, 0);
 
 	pr_debug("%s: ctrl=%p ndx=%d\n", __func__, ctrl, ctrl->ndx);
 
@@ -491,7 +479,7 @@ static void mdss_dsi_parse_trigger(struct device_node *np, char *trigger,
 }
 
 
-int mdss_dsi_parse_dcs_cmds(struct device_node *np,
+static int mdss_dsi_parse_dcs_cmds(struct device_node *np,
 		struct dsi_panel_cmds *pcmds, char *cmd_key, char *link_key)
 {
 	const char *data;
@@ -1243,7 +1231,6 @@ static int mdss_panel_parse_dt(struct device_node *np,
 	}
 
 	mdss_dsi_parse_dfps_config(np, ctrl_pdata);
-	mdss_livedisplay_parse_dt(np, pinfo);
 
 	return 0;
 
