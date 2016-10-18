@@ -44,6 +44,21 @@ static inline struct mdss_dsi_ctrl_pdata *get_rctrl(struct msm_fb_data_type *mfd
 			panel_data);
 }
 
+static bool is_panel_on(void)
+{
+	int i;
+	struct mdss_mdp_ctl *ctl;
+	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
+
+	for (i = 0; i < mdata->nctl; i++) {
+		ctl = mdata->ctl_off + i;
+		if (mdss_mdp_ctl_is_power_on(ctl))
+			return true;
+	}
+
+	return false;
+}
+
 /**
  * Send an array of dsi_cmd_desc to the display panel
  */
@@ -53,9 +68,9 @@ static int mdss_lcd_effect_send_cmds(struct mdss_lcd_effect_ctx *mlc)
 	struct dcs_cmd_req cmdreq;
 	int ret;
 
-	if (!mlc->mfd->panel_power_on) {
+	if (!is_panel_on()) {
 		msleep(200);
-		if (!mlc->mfd->panel_power_on) { 
+		if (!is_panel_on()) { 
 			return -EPERM;
 		}
 	}
@@ -91,9 +106,9 @@ static int mdss_lcd_effect_set_bl_gpio(struct msm_fb_data_type *mfd, int level)
 {
 	struct mdss_dsi_ctrl_pdata *ctrl_pdata = get_ctrl(mfd);
 
-	if (!mfd->panel_power_on) {
+	if (!is_panel_on()) {
 		msleep(200);
-		if (!mfd->panel_power_on) { 
+		if (!is_panel_on()) { 
 			return -EPERM;
 		}
 	}
@@ -136,7 +151,7 @@ static void mdss_lcd_effect_worker(struct work_struct *work) {
 	if (pinfo == NULL)
 		return;
 
-	if (!pinfo->panel_power_on)
+	if (!is_panel_on())
 		return;
 
 	mutex_lock(&mlc->lock);
