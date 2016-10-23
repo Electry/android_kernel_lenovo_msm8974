@@ -6,7 +6,6 @@
  * Copyright (C) 2012 Alexandra Chin <alexandra.chin@tw.synaptics.com>
  * Copyright (C) 2012 Scott Lin <scott.lin@tw.synaptics.com>
  * Copyright (c) 2013, The Linux Foundation. All rights reserved.
- * Copyright (C) 2016, Michal Chvíla <electrydev@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -32,14 +31,10 @@
 #include <linux/of_gpio.h>
 #include "synaptics_i2c_rmi4.h"
 #include <linux/input/mt.h>
-#include <linux/time.h>
 
 #define DRIVER_NAME "synaptics_rmi4_i2c"
 #define INPUT_PHYS_NAME "synaptics_rmi4_i2c/input0"
 #define DEBUGFS_DIR_NAME "ts_debug"
-
-#define TP_CLASS "touch"
-#define TP_DEVICE "tp_dev"
 
 #define RESET_DELAY 100
 
@@ -106,16 +101,6 @@ enum device_status {
 
 #define RMI4_COORDS_ARR_SIZE 4
 
-static atomic_t device_count;
-
-static void synaptics_rmi4_waketouch_status(struct synaptics_rmi4_data *rmi4_data,
-		int status);
-
-#define WAKETOUCH_MAX_PX 200
-#define WAKETOUCH_MAX_MS 500
-#define WAKETOUCH_MIN_MS 50
-#define WAKETOUCH_DEADZONE_PX 150
-
 static int synaptics_rmi4_i2c_read(struct synaptics_rmi4_data *rmi4_data,
 		unsigned short addr, unsigned char *data,
 		unsigned short length);
@@ -136,10 +121,6 @@ static int synaptics_rmi4_suspend(struct device *dev);
 
 static int synaptics_rmi4_resume(struct device *dev);
 
-
-static int synaptics_rmi4_power_on(struct synaptics_rmi4_data *rmi4_data, bool on);
-
-
 #ifdef CONFIG_PM
 static ssize_t synaptics_rmi4_full_pm_cycle_show(struct device *dev,
 		struct device_attribute *attr, char *buf);
@@ -150,6 +131,10 @@ static ssize_t synaptics_rmi4_full_pm_cycle_store(struct device *dev,
 #if defined(CONFIG_FB)
 static int fb_notifier_callback(struct notifier_block *self,
 				unsigned long event, void *data);
+#elif defined(CONFIG_HAS_EARLYSUSPEND)
+static void synaptics_rmi4_early_suspend(struct early_suspend *h);
+
+static void synaptics_rmi4_late_resume(struct early_suspend *h);
 #endif
 #endif
 
@@ -181,18 +166,6 @@ static ssize_t synaptics_rmi4_flipy_show(struct device *dev,
 		struct device_attribute *attr, char *buf);
 
 static ssize_t synaptics_rmi4_flipy_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count);
-
-static ssize_t synaptics_rmi4_waketouch_show(struct device *dev,
-		struct device_attribute *attr, char *buf);
-
-static ssize_t synaptics_rmi4_waketouch_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count);
-
-static ssize_t synaptics_rmi4_glove_show(struct device *dev,
-		struct device_attribute *attr, char *buf);
-
-static ssize_t synaptics_rmi4_glove_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t count);
 
 
@@ -322,35 +295,6 @@ struct synaptics_rmi4_f12_ctrl_8 {
 	};
 };
 
-struct synaptics_rmi4_f12_ctrl_9 {
-	union {
-		struct {
-			unsigned char ctrl0_0;
-			unsigned char ctrl0_1;
-			unsigned char ctrl0_2;
-			unsigned char ctrl0_3;
-			unsigned char ctrl0_4;
-			unsigned char ctrl0_5;
-			unsigned char ctrl0_6;
-			unsigned char ctrl1_0;
-			unsigned char ctrl1_1;
-			unsigned char ctrl1_2;
-			unsigned char ctrl1_3;
-			unsigned char ctrl2_0;
-			unsigned char ctrl2_1;
-			unsigned char ctrl2_2;
-			unsigned char ctrl2_3;
-			unsigned char ctrl3_0;
-			unsigned char ctrl4_0;
-			unsigned char ctrl4_1;
-			unsigned char ctrl4_2;
-			unsigned char ctrl4_3;
-			unsigned char ctrl4_4;
-		};
-		unsigned char data[21];
-	};
-};
-
 struct synaptics_rmi4_f12_ctrl_23 {
 	union {
 		struct {
@@ -475,12 +419,6 @@ static struct device_attribute attrs[] = {
 	__ATTR(flipy, (S_IRUGO | S_IWUSR | S_IWGRP),
 			synaptics_rmi4_flipy_show,
 			synaptics_rmi4_flipy_store),
-	__ATTR(gesture_on, S_IRUGO,
-			synaptics_rmi4_waketouch_show,
-			synaptics_rmi4_waketouch_store),
-	__ATTR(glove_on, S_IRUGO,
-			synaptics_rmi4_glove_show,
-			synaptics_rmi4_glove_store),
 };
 
 static bool exp_fn_inited;
@@ -546,6 +484,16 @@ static void configure_sleep(struct synaptics_rmi4_data *rmi4_data)
 	if (retval)
 		dev_err(&rmi4_data->i2c_client->dev,
 			"Unable to register fb_notifier: %d\n", retval);
+	return;
+}
+#elif defined CONFIG_HAS_EARLYSUSPEND
+static void configure_sleep(struct synaptics_rmi4_data *rmi4_data)
+{
+	rmi4_data->early_suspend.level = EARLY_SUSPEND_LEVEL_BLANK_SCREEN + 1;
+	rmi4_data->early_suspend.suspend = synaptics_rmi4_early_suspend;
+	rmi4_data->early_suspend.resume = synaptics_rmi4_late_resume;
+	register_early_suspend(&rmi4_data->early_suspend);
+
 	return;
 }
 #else
@@ -748,177 +696,6 @@ static ssize_t synaptics_rmi4_flipy_store(struct device *dev,
 	return count;
 }
 
-static ssize_t synaptics_rmi4_waketouch_show(struct device *dev,
-	struct device_attribute *attr, char *buf)
-{
-	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
-
-	return snprintf(buf, PAGE_SIZE, "%u\n",
-		rmi4_data->waketouch_flag);
-}
-
-static ssize_t synaptics_rmi4_waketouch_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	unsigned int input;
-	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
-
-	if (sscanf(buf, "%u", &input) != 1)
-		return -EINVAL;
-
-	if (input == 1) {
-		if (!rmi4_data->waketouch_flag) {
-			rmi4_data->waketouch_flag = true;
-			enable_irq_wake(rmi4_data->irq);
-			dev_err(dev, "%s: WakeTouch: Enabled, waketouch_flag=%d\n",
-				__func__, rmi4_data->waketouch_flag);
-		}
-	} else {
-		if (rmi4_data->waketouch_flag) {
-			rmi4_data->waketouch_flag = false;
-			disable_irq_wake(rmi4_data->irq);
-			dev_err(dev, "%s: WakeTouch: Disabled, waketouch_flag=%d\n",
-				__func__, rmi4_data->waketouch_flag);
-		}
-	}
-
-	return count;
-}
-
-static ssize_t synaptics_rmi4_glove_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
-
-	return snprintf(buf, PAGE_SIZE, "%d\n", rmi4_data->glove_flag);
-}
-
-static ssize_t synaptics_rmi4_glove_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	int retval, flag;
-	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
-	struct synaptics_rmi4_f12_ctrl_9 ctrl_9;
-	struct synaptics_rmi4_f12_query_5 query_5;
-	unsigned char ctrl_9_offset;
-	unsigned char sen_on[2] = {0x10,0x05};
-	unsigned char sen_off[2] = {0x1e,0x05};
-
-	retval = synaptics_rmi4_i2c_read(rmi4_data,
-			rmi4_data->f12_query_base_addr + 5,
-			query_5.data,
-			sizeof(query_5.data));
-	if (retval < 0)
-		return retval;
-
-	ctrl_9_offset = query_5.ctrl0_is_present +
-			query_5.ctrl1_is_present +
-			query_5.ctrl2_is_present +
-			query_5.ctrl3_is_present +
-			query_5.ctrl4_is_present +
-			query_5.ctrl5_is_present +
-			query_5.ctrl6_is_present +
-			query_5.ctrl7_is_present +
-			query_5.ctrl8_is_present;
-
-	if (sscanf(buf, "%d", &flag) != 1)
-		return -EINVAL;
-
-	if (flag > 0)
-		rmi4_data->glove_flag = true;
-	else
-		rmi4_data->glove_flag = false;
-
-	pr_info("%s: glove on is %d\n", __func__, rmi4_data->glove_flag);
-	pr_debug("%s: ctrl base addr is %x, ctrl 9 offset is %d\n",
-			__func__, rmi4_data->f12_ctrl_base_addr, ctrl_9_offset);
-
-	if (rmi4_data->glove_flag) {
-		retval = synaptics_rmi4_i2c_write(rmi4_data,
-				rmi4_data->f12_ctrl_base_addr + ctrl_9_offset,
-				sen_on,
-				sizeof(sen_on));
-		if (retval < 0) {
-			pr_err("%s: write to ctrl9 error!\n", __func__);
-			return retval;
-		}
-
-		retval = synaptics_rmi4_i2c_read(rmi4_data,
-				rmi4_data->f12_ctrl_base_addr + ctrl_9_offset,
-				ctrl_9.data,
-				sizeof(ctrl_9.data));
-		if (retval < 0)
-			return retval;
-
-		pr_debug("%s: write to 0x10,0x05,ctrl9 0-0 is 0x%x,0-1 is 0x%x\n",
-				__func__, ctrl_9.ctrl0_0, ctrl_9.ctrl0_1);
-
-		retval = synaptics_rmi4_i2c_read(rmi4_data,
-				0x0015,
-				ctrl_9.data,
-				sizeof(ctrl_9.data));
-		if (retval < 0)
-			return retval;
-
-		pr_debug("%s: write to 0x10,0x05, ctrl9 0-0 is 0x%x, 0-1 is 0x%x\n",
-				__func__, ctrl_9.ctrl0_0, ctrl_9.ctrl0_1);
-	} else {
-		retval = synaptics_rmi4_i2c_write(rmi4_data,
-				rmi4_data->f12_ctrl_base_addr + ctrl_9_offset,
-				sen_off,
-				sizeof(sen_off));
-		if (retval < 0) {
-			pr_err("%s: write to ctrl9 error!\n", __func__);
-			return retval;
-		}
-
-		retval = synaptics_rmi4_i2c_read(rmi4_data,
-				rmi4_data->f12_ctrl_base_addr + ctrl_9_offset,
-				ctrl_9.data,
-				sizeof(ctrl_9.data));
-		if (retval < 0)
-			return retval;
-
-		pr_debug("%s: write to 0x1e, 0x05, ctrl9 0-0 is 0x%x, 0-1 is 0x%x\n",
-				__func__, ctrl_9.ctrl0_0, ctrl_9.ctrl0_1);
-
-		retval = synaptics_rmi4_i2c_read(rmi4_data,
-				0x0015,
-				ctrl_9.data,
-				sizeof(ctrl_9.data));
-		if (retval < 0)
-			return retval;
-
-		pr_debug("%s: write to 0x10, 0x05, ctrl9 0-0 is 0x%x, 0-1 is 0x%x\n",
-				__func__, ctrl_9.ctrl0_0, ctrl_9.ctrl0_1);
-	}
-	return count;
-}
-
-static int synaptics_rmi4_power_reset(struct synaptics_rmi4_data *rmi4_data)
-{
-	int retval = 0;
-
-	retval = synaptics_rmi4_power_on(rmi4_data, false);
-	if (retval < 0) {
-		dev_err(&rmi4_data->i2c_client->dev, "Failed to power off\n");
-		retval = -EIO;
-		goto exit;
-	}
-	mdelay(100);
-
-	retval = synaptics_rmi4_power_on(rmi4_data, true);
-	if (retval < 0) {
-		dev_err(&rmi4_data->i2c_client->dev, "Failed to power on\n");
-		retval = -EIO;
-		goto exit;
-	}
-	mdelay(200);
-
-exit:
-	return retval;
-}
-
  /**
  * synaptics_rmi4_set_page()
  *
@@ -951,15 +728,6 @@ static int synaptics_rmi4_set_page(struct synaptics_rmi4_data *rmi4_data,
 				rmi4_data->current_page = page;
 				break;
 			}
-		}
-
-		if (retry == SYN_I2C_RETRY_TIMES && !rmi4_data->fw_updating) {
-			/* do power reset */
-			dev_err(&rmi4_data->i2c_client->dev,
-				"%s: I2C set page over retry limit, do power reset!\n",
-				__func__);
-
-			synaptics_rmi4_power_reset(rmi4_data);
 		}
 	} else
 		return PAGE_SELECT_LEN;
@@ -1016,13 +784,11 @@ static int synaptics_rmi4_i2c_read(struct synaptics_rmi4_data *rmi4_data,
 		msleep(20);
 	}
 
-	if (retry == SYN_I2C_RETRY_TIMES && !rmi4_data->fw_updating) {
-		/* do power reset */
+	if (retry == SYN_I2C_RETRY_TIMES) {
 		dev_err(&rmi4_data->i2c_client->dev,
-			"%s: I2C read over retry limit, do power reset!\n",
-			__func__);
-
-		synaptics_rmi4_power_reset(rmi4_data);
+				"%s: I2C read over retry limit\n",
+				__func__);
+		retval = -EIO;
 	}
 
 exit:
@@ -1076,13 +842,11 @@ static int synaptics_rmi4_i2c_write(struct synaptics_rmi4_data *rmi4_data,
 		msleep(20);
 	}
 
-	if (retry == SYN_I2C_RETRY_TIMES && !rmi4_data->fw_updating) {
-		/* do power reset */
+	if (retry == SYN_I2C_RETRY_TIMES) {
 		dev_err(&rmi4_data->i2c_client->dev,
-			"%s: I2C write over retry limit, do power reset!\n",
-			__func__);
-
-		synaptics_rmi4_power_reset(rmi4_data);
+				"%s: I2C write over retry limit\n",
+				__func__);
+		retval = -EIO;
 	}
 
 exit:
@@ -1115,95 +879,6 @@ static void synaptics_rmi4_release_all(struct synaptics_rmi4_data *rmi4_data)
 			BTN_TOOL_FINGER, 0);
 
 	input_sync(rmi4_data->input_dev);
-}
-
-/**
- * synaptics_rmi4_waketouch_f12_gesture()
- *
- * Called by synaptics_rmi4_f12_abs_report()
- */
-static int synaptics_rmi4_waketouch_f12_gesture(struct synaptics_rmi4_data *rmi4_data,
-		struct synaptics_rmi4_f12_finger_data *data, unsigned char fingers_to_process)
-{
-	unsigned char touch_count = 0; /* number of touch points */
-	unsigned char finger;
-	unsigned char finger_status;
-
-	struct timeval tval;
-	unsigned long time_now;
-	unsigned long time_diff;
-
-	int x;
-	int y;
-	int touch_diff_x;
-	int touch_diff_y;
-
-	struct synaptics_rmi4_f12_finger_data *finger_data;
-
-	do_gettimeofday(&tval);
-	time_now = (tval.tv_sec * USEC_PER_SEC + tval.tv_usec) / 1000;
-	time_diff = time_now - rmi4_data->last_touch_ms;
-
-	for (finger = 0; finger < fingers_to_process; finger++) {
-		finger_data = data + finger;
-		finger_status = finger_data->object_type_and_status & MASK_2BIT;
-
-		if (finger_status == 1) {
-			touch_count++;
-
-			x = (finger_data->x_msb << 8) | (finger_data->x_lsb);
-			y = (finger_data->y_msb << 8) | (finger_data->y_lsb);
-
-			if (rmi4_data->flip_x)
-				x = rmi4_data->sensor_max_x - x;
-			if (rmi4_data->flip_y)
-				y = rmi4_data->sensor_max_y - y;
-
-			// deadzone check
-			if (x < WAKETOUCH_DEADZONE_PX
-					|| x > rmi4_data->sensor_max_x - WAKETOUCH_DEADZONE_PX
-					|| y < WAKETOUCH_DEADZONE_PX
-					|| y > rmi4_data->sensor_max_y - WAKETOUCH_DEADZONE_PX) {
-				continue;
-			}
-
-			touch_diff_x = abs(rmi4_data->last_touch_x - x);
-			touch_diff_y = abs(rmi4_data->last_touch_y - y);
-
-			rmi4_data->last_touch_ms = time_now;
-			rmi4_data->last_touch_x = x;
-			rmi4_data->last_touch_y = y;
-
-			// time check
-			if (time_diff < WAKETOUCH_MIN_MS
-					|| time_diff > WAKETOUCH_MAX_MS) {
-				continue;
-			}
-
-			// pos check
-			if ((touch_diff_x > WAKETOUCH_MAX_PX)
-					|| (touch_diff_y > WAKETOUCH_MAX_PX)) {
-				dev_err(&rmi4_data->i2c_client->dev,
-					"F12: WakeTouch: Double tap touches are apart diff_x=%d diff_y=%d, ignoring!",
-					touch_diff_x, touch_diff_y);
-				continue;
-			}
-
-			// WAKE UP ->
-			dev_err(&rmi4_data->i2c_client->dev,
-				"F12: WakeTouch: Registered double tap finger=%d at x=%d,y=%d time_diff=%lu\n",
-				finger, x, y, time_diff);
-
-			input_report_key(rmi4_data->input_dev, KEY_WAKEUP, 1);
-			input_sync(rmi4_data->input_dev);
-			input_report_key(rmi4_data->input_dev, KEY_WAKEUP, 0);
-			input_sync(rmi4_data->input_dev);
-
-			return touch_count;
-		}
-	}
-
-	return touch_count; // 0
 }
 
  /**
@@ -1256,10 +931,6 @@ static int synaptics_rmi4_f11_abs_report(struct synaptics_rmi4_data *rmi4_data,
 			num_of_finger_status_regs);
 	if (retval < 0)
 		return 0;
-
-	if (rmi4_data->waketouch_flag && rmi4_data->waketouch_status != STATUS_AWAKE) {
-		return 0; // ignore f11
-	}
 
 	for (finger = 0; finger < fingers_supported; finger++) {
 		reg_index = finger / 4;
@@ -1392,11 +1063,6 @@ static int synaptics_rmi4_f12_abs_report(struct synaptics_rmi4_data *rmi4_data,
 
 	data = (struct synaptics_rmi4_f12_finger_data *)fhandler->data;
 
-	// Gestures (DT2W) :)
-	if (rmi4_data->waketouch_flag && rmi4_data->waketouch_status == STATUS_ASLEEP) {
-		return synaptics_rmi4_waketouch_f12_gesture(rmi4_data, data, fingers_to_process);
-	}
-
 	for (finger = 0; finger < fingers_to_process; finger++) {
 		finger_data = data + finger;
 		finger_status = finger_data->object_type_and_status & MASK_2BIT;
@@ -1509,10 +1175,6 @@ static void synaptics_rmi4_f1a_report(struct synaptics_rmi4_data *rmi4_data,
 				"%s: Failed to read button data registers\n",
 				__func__);
 		return;
-	}
-
-	if (rmi4_data->waketouch_flag && rmi4_data->waketouch_status != STATUS_AWAKE) {
-		return; // ignore f1a
 	}
 
 	data = f1a->button_data_buffer;
@@ -2163,10 +1825,6 @@ static int synaptics_rmi4_f12_init(struct synaptics_rmi4_data *rmi4_data,
 	rmi4_data->max_touch_width = max(rmi4_data->num_of_rx,
 			rmi4_data->num_of_tx);
 
-	rmi4_data->last_touch_ms = 0;
-	rmi4_data->last_touch_x = 0;
-	rmi4_data->last_touch_y = 0;
-
 	fhandler->intr_reg_num = (intr_count + 7) / 8;
 	if (fhandler->intr_reg_num != 0)
 		fhandler->intr_reg_num -= 1;
@@ -2558,12 +2216,6 @@ static int synaptics_rmi4_query_device(struct synaptics_rmi4_data *rmi4_data)
 				if (rmi_fd.intr_src_count == 0)
 					break;
 
-				rmi4_data->f12_query_base_addr =
-						rmi_fd.query_base_addr;
-
-				rmi4_data->f12_ctrl_base_addr =
-						rmi_fd.ctrl_base_addr;
-
 				retval = synaptics_rmi4_alloc_fh(&fhandler,
 						&rmi_fd, page_number);
 				if (retval < 0) {
@@ -2753,7 +2405,6 @@ static int synaptics_rmi4_reset_device(struct synaptics_rmi4_data *rmi4_data)
 	struct synaptics_rmi4_fn *fhandler;
 	struct synaptics_rmi4_fn *next_fhandler;
 	struct synaptics_rmi4_device_info *rmi;
-	unsigned char intr_status[MAX_INTR_REGISTERS];
 
 	rmi = &(rmi4_data->rmi4_mod_info);
 
@@ -2786,21 +2437,6 @@ static int synaptics_rmi4_reset_device(struct synaptics_rmi4_data *rmi4_data)
 				"%s: Failed to query device\n",
 				__func__);
 		return retval;
-	}
-
-	if (rmi4_data->waketouch_flag) {
-		/* Clear interrupts first */
-		retval = synaptics_rmi4_i2c_read(rmi4_data,
-				rmi4_data->f01_data_base_addr + 1,
-				intr_status,
-				rmi4_data->num_of_intr_regs);
-		if (retval < 0) {
-			dev_err(&rmi4_data->i2c_client->dev,
-				"%s: Failed to clear interrupts\n", __func__);
-			return retval;
-		}
-
-		synaptics_rmi4_waketouch_status(rmi4_data, STATUS_AWAKE);
 	}
 
 	return 0;
@@ -2945,25 +2581,6 @@ static int synaptics_rmi4_regulator_configure(struct synaptics_rmi4_data
 		}
 	}
 
-	rmi4_data->vdd1 = regulator_get(&rmi4_data->i2c_client->dev,
-					"vdd1");
-	if (IS_ERR(rmi4_data->vdd1)) {
-		dev_err(&rmi4_data->i2c_client->dev,
-				"%s: Failed to get vdd1 regulator\n",
-				__func__);
-		return PTR_ERR(rmi4_data->vdd1);
-	}
-
-	if (regulator_count_voltages(rmi4_data->vdd1) > 0) {
-		retval = regulator_set_voltage(rmi4_data->vdd1,
-			RMI4_VTG_MIN_UV, RMI4_VTG_MAX_UV);
-		if (retval) {
-			dev_err(&rmi4_data->i2c_client->dev,
-				"regulator set_vtg failed retval =%d\n",
-				retval);
-			goto err_set_vtg_vdd1;
-		}
-	}
 	if (rmi4_data->board->i2c_pull_up) {
 		rmi4_data->vcc_i2c = regulator_get(&rmi4_data->i2c_client->dev,
 						"vcc_i2c");
@@ -2992,11 +2609,6 @@ err_set_vtg_i2c:
 	if (rmi4_data->board->i2c_pull_up)
 		regulator_put(rmi4_data->vcc_i2c);
 err_get_vtg_i2c:
-	if (regulator_count_voltages(rmi4_data->vdd1) > 0)
-		regulator_set_voltage(rmi4_data->vdd1, 0,
-			RMI4_VTG_MAX_UV);
-err_set_vtg_vdd1:
-	regulator_put(rmi4_data->vdd1);
 	if (regulator_count_voltages(rmi4_data->vdd) > 0)
 		regulator_set_voltage(rmi4_data->vdd, 0,
 			RMI4_VTG_MAX_UV);
@@ -3009,10 +2621,6 @@ hw_shutdown:
 		regulator_set_voltage(rmi4_data->vdd, 0,
 			RMI4_VTG_MAX_UV);
 	regulator_put(rmi4_data->vdd);
-	if (regulator_count_voltages(rmi4_data->vdd1) > 0)
-		regulator_set_voltage(rmi4_data->vdd1, 0,
-			RMI4_VTG_MAX_UV);
-	regulator_put(rmi4_data->vdd1);
 	if (rmi4_data->board->i2c_pull_up) {
 		if (regulator_count_voltages(rmi4_data->vcc_i2c) > 0)
 			regulator_set_voltage(rmi4_data->vcc_i2c, 0,
@@ -3046,22 +2654,6 @@ static int synaptics_rmi4_power_on(struct synaptics_rmi4_data *rmi4_data,
 		goto error_reg_en_vdd;
 	}
 
-	retval = reg_set_optimum_mode_check(rmi4_data->vdd1,
-		RMI4_ACTIVE_LOAD_UA);
-	if (retval < 0) {
-		dev_err(&rmi4_data->i2c_client->dev,
-			"Regulator vdd1 set_opt failed rc=%d\n",
-			retval);
-		return retval;
-	}
-
-	retval = regulator_enable(rmi4_data->vdd1);
-	if (retval) {
-		dev_err(&rmi4_data->i2c_client->dev,
-			"Regulator vdd1 enable failed rc=%d\n",
-			retval);
-		goto error_reg_en_vdd1;
-	}
 	if (rmi4_data->board->i2c_pull_up) {
 		retval = reg_set_optimum_mode_check(rmi4_data->vcc_i2c,
 			RMI4_I2C_LOAD_UA);
@@ -3086,9 +2678,6 @@ error_reg_en_vcc_i2c:
 	if (rmi4_data->board->i2c_pull_up)
 		reg_set_optimum_mode_check(rmi4_data->vcc_i2c, 0);
 error_reg_opt_i2c:
-	regulator_disable(rmi4_data->vdd1);
-error_reg_en_vdd1:
-	reg_set_optimum_mode_check(rmi4_data->vdd1, 0);
 	regulator_disable(rmi4_data->vdd);
 error_reg_en_vdd:
 	reg_set_optimum_mode_check(rmi4_data->vdd, 0);
@@ -3097,8 +2686,6 @@ error_reg_en_vdd:
 power_off:
 	reg_set_optimum_mode_check(rmi4_data->vdd, 0);
 	regulator_disable(rmi4_data->vdd);
-	reg_set_optimum_mode_check(rmi4_data->vdd1, 0);
-	regulator_disable(rmi4_data->vdd1);
 	if (rmi4_data->board->i2c_pull_up) {
 		reg_set_optimum_mode_check(rmi4_data->vcc_i2c, 0);
 		regulator_disable(rmi4_data->vcc_i2c);
@@ -3206,8 +2793,9 @@ err_irq_gpio_req:
  * This funtion allocates and initializes the resources for the driver
  * as an input driver, turns on the power to the sensor, queries the
  * sensor for its supported Functions and characteristics, registers
- * the driver to the input subsystem, sets up the interrupt, and 
- * creates a work queue for detection of other expansion Function
+ * the driver to the input subsystem, sets up the interrupt, handles
+ * the registration of the early_suspend and late_resume functions,
+ * and creates a work queue for detection of other expansion Function
  * modules.
  */
 static int __devinit synaptics_rmi4_probe(struct i2c_client *client,
@@ -3283,13 +2871,6 @@ static int __devinit synaptics_rmi4_probe(struct i2c_client *client,
 	rmi4_data->irq_enabled = false;
 	rmi4_data->fw_updating = false;
 	rmi4_data->suspended = false;
-
-	// WakeTouch
-	rmi4_data->waketouch_flag = true;
-	rmi4_data->waketouch_status = STATUS_AWAKE;
-
-	// Glove
-	rmi4_data->glove_flag = false;
 
 	rmi4_data->i2c_read = synaptics_rmi4_i2c_read;
 	rmi4_data->i2c_write = synaptics_rmi4_i2c_write;
@@ -3416,9 +2997,6 @@ static int __devinit synaptics_rmi4_probe(struct i2c_client *client,
 		}
 	}
 
-	// WakeTouch
-	input_set_capability(rmi4_data->input_dev, EV_KEY, KEY_WAKEUP);
-
 	retval = input_register_device(rmi4_data->input_dev);
 	if (retval) {
 		dev_err(&client->dev,
@@ -3449,10 +3027,6 @@ static int __devinit synaptics_rmi4_probe(struct i2c_client *client,
 		synaptics_rmi4_irq, platform_data->irq_flags,
 		DRIVER_NAME, rmi4_data);
 	rmi4_data->irq_enabled = true;
-
-	// WakeTouch
-	if (rmi4_data->waketouch_flag)
-		enable_irq_wake(rmi4_data->irq);
 
 	if (retval < 0) {
 		dev_err(&client->dev,
@@ -3493,7 +3067,6 @@ static int __devinit synaptics_rmi4_probe(struct i2c_client *client,
 
 	synaptics_rmi4_sensor_wake(rmi4_data);
 
-	// CHECK ME !
 	retval = synaptics_rmi4_irq_enable(rmi4_data, true);
 	if (retval < 0) {
 		dev_err(&client->dev,
@@ -3507,35 +3080,6 @@ static int __devinit synaptics_rmi4_probe(struct i2c_client *client,
 		dev_err(&client->dev, "Failed to check configuration\n");
 		return retval;
 	}
-
-	/* Create tp class */
-	rmi4_data->tp_class = class_create(THIS_MODULE, TP_CLASS);
-	if (IS_ERR(rmi4_data->tp_class)) {
-		dev_err(&client->dev,
-			"%s: Failed to create tp class\n", __func__);
-		return retval;
-	}
-
-	/* Create device */
-	atomic_set(&device_count, 0);
-	rmi4_data->index = atomic_inc_return(&device_count);
-	rmi4_data->dev = device_create(rmi4_data->tp_class, NULL,
-				MKDEV(0, rmi4_data->index), NULL, TP_DEVICE);
-	if (IS_ERR(rmi4_data->dev)) {
-		dev_err(&client->dev,
-			"%s: Failed to create device\n", __func__);
-		return retval;
-	}
-	for (attr_count = 0; attr_count < ARRAY_SIZE(attrs); attr_count++) {
-		retval = sysfs_create_file(&rmi4_data->dev->kobj,
-				&attrs[attr_count].attr);
-		if (retval < 0) {
-			dev_err(&client->dev,
-				"%s: Failed to create sysfs attributes\n", __func__);
-			return retval;
-		}
-	}
-	dev_set_drvdata(rmi4_data->dev, rmi4_data);
 
 	return retval;
 
@@ -3622,17 +3166,6 @@ static int __devexit synaptics_rmi4_remove(struct i2c_client *client)
 				&attrs[attr_count].attr);
 	}
 
-	if (!rmi4_data->dev && !rmi4_data->tp_class) {
-		for (attr_count = 0; attr_count < ARRAY_SIZE(attrs); attr_count++)
-			sysfs_remove_file(&rmi4_data->dev->kobj,
-				&attrs[attr_count].attr);
-	}
-	dev_set_drvdata(rmi4_data->dev, NULL);
-	device_destroy(rmi4_data->tp_class, MKDEV(0, rmi4_data->index));
-
-	if (!rmi4_data->tp_class)
-		class_destroy(rmi4_data->tp_class);
-
 	input_unregister_device(rmi4_data->input_dev);
 
 	mutex_lock(&rmi->support_fn_list_mutex);
@@ -3663,39 +3196,11 @@ static int __devexit synaptics_rmi4_remove(struct i2c_client *client)
 	return 0;
 }
 
-static void synaptics_rmi4_waketouch_status(struct synaptics_rmi4_data *rmi4_data,
-		int status)
-{
-	if (!rmi4_data->waketouch_flag)
-		return;
-
-	switch(status) {
-		case STATUS_ASLEEP:
-			rmi4_data->waketouch_status = STATUS_ASLEEP;
-			dev_err(&(rmi4_data->input_dev->dev),
-				"%s: WakeTouch: Entering ASLEEP waketouch_status=%d\n",
-				__func__, rmi4_data->waketouch_status);
-			break;
-		case STATUS_AWAKE:
-			rmi4_data->waketouch_status = STATUS_AWAKE;
-			dev_err(&(rmi4_data->input_dev->dev),
-				"%s: WakeTouch: Entering AWAKE waketouch_status=%d\n",
-				__func__, rmi4_data->waketouch_status);
-			break;
-		default:
-			dev_err(&(rmi4_data->input_dev->dev),
-				"%s: WakeTouch: Invalid status! Current waketouch_status=%d\n",
-				__func__, rmi4_data->waketouch_status);
-	}
-
-	return;
-}
-
 #ifdef CONFIG_PM
  /**
  * synaptics_rmi4_sensor_sleep()
  *
- * Called by synaptics_rmi4_suspend().
+ * Called by synaptics_rmi4_early_suspend() and synaptics_rmi4_suspend().
  *
  * This function stops finger data acquisition and puts the sensor to sleep.
  */
@@ -3739,7 +3244,7 @@ static void synaptics_rmi4_sensor_sleep(struct synaptics_rmi4_data *rmi4_data)
  /**
  * synaptics_rmi4_sensor_wake()
  *
- * Called by synaptics_rmi4_resume().
+ * Called by synaptics_rmi4_resume() and synaptics_rmi4_late_resume().
  *
  * This function wakes the sensor from sleep.
  */
@@ -3805,6 +3310,67 @@ static int fb_notifier_callback(struct notifier_block *self,
 	}
 
 	return 0;
+}
+#elif defined(CONFIG_HAS_EARLYSUSPEND)
+ /**
+ * synaptics_rmi4_early_suspend()
+ *
+ * Called by the kernel during the early suspend phase when the system
+ * enters suspend.
+ *
+ * This function calls synaptics_rmi4_sensor_sleep() to stop finger
+ * data acquisition and put the sensor to sleep.
+ */
+static void synaptics_rmi4_early_suspend(struct early_suspend *h)
+{
+	struct synaptics_rmi4_data *rmi4_data =
+			container_of(h, struct synaptics_rmi4_data,
+			early_suspend);
+
+	if (rmi4_data->stay_awake)
+		rmi4_data->staying_awake = true;
+	else
+		rmi4_data->staying_awake = false;
+
+	rmi4_data->touch_stopped = true;
+	wake_up(&rmi4_data->wait);
+	synaptics_rmi4_irq_enable(rmi4_data, false);
+	synaptics_rmi4_sensor_sleep(rmi4_data);
+
+	if (rmi4_data->full_pm_cycle)
+		synaptics_rmi4_suspend(&(rmi4_data->input_dev->dev));
+
+	return;
+}
+
+ /**
+ * synaptics_rmi4_late_resume()
+ *
+ * Called by the kernel during the late resume phase when the system
+ * wakes up from suspend.
+ *
+ * This function goes through the sensor wake process if the system wakes
+ * up from early suspend (without going into suspend).
+ */
+static void synaptics_rmi4_late_resume(struct early_suspend *h)
+{
+	struct synaptics_rmi4_data *rmi4_data =
+			container_of(h, struct synaptics_rmi4_data,
+			early_suspend);
+
+	if (rmi4_data->staying_awake)
+		return;
+
+	if (rmi4_data->full_pm_cycle)
+		synaptics_rmi4_resume(&(rmi4_data->input_dev->dev));
+
+	if (rmi4_data->sensor_sleep == true) {
+		synaptics_rmi4_sensor_wake(rmi4_data);
+		rmi4_data->touch_stopped = false;
+		synaptics_rmi4_irq_enable(rmi4_data, true);
+	}
+
+	return;
 }
 #endif
 
@@ -3976,30 +3542,13 @@ static int synaptics_rmi4_check_configuration(struct synaptics_rmi4_data
  * enters suspend.
  *
  * This function stops finger data acquisition and puts the sensor to
- * sleep, disables the interrupt, and turns off the power to the sensor.
+ * sleep (if not already done so during the early suspend phase),
+ * disables the interrupt, and turns off the power to the sensor.
  */
 static int synaptics_rmi4_suspend(struct device *dev)
 {
 	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
 	int retval;
-	unsigned char intr_status[MAX_INTR_REGISTERS];
-
-	if (rmi4_data->waketouch_flag) {
-		/* Clear interrupts first */
-		retval = synaptics_rmi4_i2c_read(rmi4_data,
-				rmi4_data->f01_data_base_addr + 1,
-				intr_status,
-				rmi4_data->num_of_intr_regs);
-		if (retval < 0) {
-			dev_err(dev, "%s: Failed to clear interrupts\n", __func__);
-			return retval;
-		}
-
-		//synaptics_rmi4_release_all(rmi4_data);
-		synaptics_rmi4_waketouch_status(rmi4_data, STATUS_ASLEEP);
-
-		return 0;
-	}
 
 	if (rmi4_data->stay_awake) {
 		rmi4_data->staying_awake = true;
@@ -4059,26 +3608,6 @@ static int synaptics_rmi4_resume(struct device *dev)
 {
 	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
 	int retval;
-	unsigned char intr_status[MAX_INTR_REGISTERS];
-
-	if (rmi4_data->waketouch_flag) {
-		/* Clear interrupts first */
-		retval = synaptics_rmi4_i2c_read(rmi4_data,
-				rmi4_data->f01_data_base_addr + 1,
-				intr_status,
-				rmi4_data->num_of_intr_regs);
-		if (retval < 0) {
-			dev_err(dev, "%s: Failed to clear interrupts\n", __func__);
-			return retval;
-		}
-
-		synaptics_rmi4_release_all(rmi4_data);
-		synaptics_rmi4_sensor_wake(rmi4_data);
-		synaptics_rmi4_irq_enable(rmi4_data, true); //JIC
-		synaptics_rmi4_waketouch_status(rmi4_data, STATUS_AWAKE);
-
-		return 0;
-	}
 
 	if (rmi4_data->staying_awake)
 		return 0;
@@ -4116,7 +3645,7 @@ static int synaptics_rmi4_resume(struct device *dev)
 	return 0;
 }
 
-#if !defined(CONFIG_FB)
+#if (!defined(CONFIG_FB) && !defined(CONFIG_HAS_EARLYSUSPEND))
 static const struct dev_pm_ops synaptics_rmi4_dev_pm_ops = {
 	.suspend = synaptics_rmi4_suspend,
 	.resume  = synaptics_rmi4_resume,

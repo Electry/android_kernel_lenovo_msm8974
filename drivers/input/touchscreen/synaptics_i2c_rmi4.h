@@ -31,6 +31,8 @@
 #ifdef CONFIG_FB
 #include <linux/notifier.h>
 #include <linux/fb.h>
+#elif defined CONFIG_HAS_EARLYSUSPEND
+#include <linux/earlysuspend.h>
 #endif
 #include <linux/debugfs.h>
 
@@ -69,11 +71,6 @@
 #define MASK_1BIT 0x01
 
 #define NAME_BUFFER_SIZE 256
-
-enum waketouch_status {
-	STATUS_ASLEEP = 0,
-	STATUS_AWAKE = 1,
-};
 
 /*
  * struct synaptics_rmi4_fn_desc - function descriptor fields in PDT
@@ -178,9 +175,10 @@ struct synaptics_rmi4_device_info {
  * @rmi4_io_ctrl_mutex: mutex for i2c i/o control
  * @det_work: work thread instance for expansion function detection
  * @det_workqueue: pointer to work queue for work thread instance
+ * @early_suspend: instance to support early suspend power management
  * @current_page: current page in sensor to acess
  * @button_0d_enabled: flag for 0d button support
- * @full_pm_cycle: flag for full power management cycle
+ * @full_pm_cycle: flag for full power management cycle in early suspend stage
  * @num_of_intr_regs: number of interrupt registers
  * @f01_query_base_addr: query base address for f01
  * @f01_cmd_base_addr: command base address for f01
@@ -211,11 +209,13 @@ struct synaptics_rmi4_data {
 	const struct synaptics_rmi4_platform_data *board;
 	struct synaptics_rmi4_device_info rmi4_mod_info;
 	struct regulator *vdd;
-	struct regulator *vdd1;
 	struct regulator *vcc_i2c;
 	struct mutex rmi4_io_ctrl_mutex;
 	struct delayed_work det_work;
 	struct workqueue_struct *det_workqueue;
+#ifdef CONFIG_HAS_EARLYSUSPEND
+	struct early_suspend early_suspend;
+#endif
 	struct dentry *dir;
 	char fw_image_name[NAME_BUFFER_SIZE];
 	unsigned char current_page;
@@ -232,17 +232,6 @@ struct synaptics_rmi4_data {
 	unsigned short f01_cmd_base_addr;
 	unsigned short f01_ctrl_base_addr;
 	unsigned short f01_data_base_addr;
-	unsigned short f12_query_base_addr;
-	unsigned short f12_ctrl_base_addr;
-
-	bool waketouch_flag;
-	enum waketouch_status waketouch_status;
-	unsigned long last_touch_ms;
-	int last_touch_x;
-	int last_touch_y;
-
-	bool glove_flag;
-
 	int irq;
 	int sensor_max_x;
 	int sensor_max_y;
@@ -269,10 +258,11 @@ struct synaptics_rmi4_data {
 	int (*reset_device)(struct synaptics_rmi4_data *rmi4_data);
 #ifdef CONFIG_FB
 	struct notifier_block fb_notif;
+#else
+#ifdef CONFIG_HAS_EARLYSUSPEND
+	struct early_suspend early_suspend;
 #endif
-	struct class *tp_class;
-	int index;
-	struct device *dev;
+#endif
 };
 
 enum exp_fn {
