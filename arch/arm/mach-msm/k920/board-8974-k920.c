@@ -48,9 +48,7 @@
 #include "pm.h"
 #include "modem_notifier.h"
 #include "platsmp.h"
-/* Tony Sun, 2013.9.24, For WIFI/BT read MAC from NV, START */
 #include "lenovo_nv.h"
-/* Tony Sun, 2013.9.24, For WIFI/BT read MAC from NV, END */
 
 static struct memtype_reserve msm8974_reserve_table[] __initdata = {
 	[MEMTYPE_SMI] = {
@@ -102,10 +100,7 @@ void __init msm8974_add_drivers(void)
 	rpm_regulator_smd_driver_init();
 	msm_spm_device_init();
 	krait_power_init();
-	if (of_board_is_rumi())
-		msm_clock_init(&msm8974_rumi_clock_init_data);
-	else
-		msm_clock_init(&msm8974_clock_init_data);
+	msm_clock_init(&msm8974_clock_init_data);
 	tsens_tm_init_driver();
 	msm_thermal_device_init();
 }
@@ -174,10 +169,7 @@ void __init msm8974_init(void)
 	regulator_has_full_constraints();
 	board_dt_populate(adata);
 	msm8974_add_drivers();
-
-	/* Tony Sun, 2013.9.24, For WIFI/BT read MAC from NV, START */
 	lenovo_nv_init();
-	/* Tony Sun, 2013.9.24, For WIFI/BT read MAC from NV, END */
 }
 
 void __init msm8974_init_very_early(void)
