@@ -165,7 +165,7 @@ static ssize_t pn547_dev_write(struct file *filp, const char __user *buf,
 {
 	struct pn547_dev  *pn547_dev = filp->private_data;
 	char tmp[MAX_BUFFER_SIZE];
-	int ret;
+	int ret, retry = 2;
 
 	//pr_info("%s ++ \n", __func__);
 
@@ -179,11 +179,20 @@ static ssize_t pn547_dev_write(struct file *filp, const char __user *buf,
 
 	//pr_info("%s : writing %zu bytes.\n", __func__, count);
 	/* Write data */
-	ret = i2c_master_send(pn547_dev->client, tmp, count);
+	do {
+		retry--;
+		ret = i2c_master_send(pn547_dev->client, tmp, count);
+		if (ret == count)
+			break;
+
+		usleep_range(6000, 10000); /* Retry, chip was in standby */
+	} while (retry);
+
 	if (ret != count) {
 		pr_err("%s : i2c_master_send returned %d\n", __func__, ret);
 		ret = -EIO;
 	}
+
 	return ret;
 }
 
