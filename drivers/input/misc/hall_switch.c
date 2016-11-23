@@ -64,8 +64,7 @@ static int __devinit hall_probe(struct platform_device *pdev)
 
 	hall_data = kzalloc(sizeof(struct hall_switch_data), GFP_KERNEL);
 	if (!hall_data) {
-		dev_err(&pdev->dev, "Failed to get irq gpio, ret=%d\n",
-			hall_data->hall_gpio);
+		dev_err(&pdev->dev, "Failed allocate memory for hall_data\n");
 		retval = -ENOMEM;
 		goto exit;
 	}
@@ -79,7 +78,7 @@ static int __devinit hall_probe(struct platform_device *pdev)
 	hall_data->hall_gpio = retval;
 
 	hall_data->input_dev = input_allocate_device();
-	if (hall_data->input_dev == NULL){\
+	if (hall_data->input_dev == NULL) {
 		dev_err(&pdev->dev, "Failed to allocate input device\n");
 		retval = -ENOMEM;
 		goto exit_kfree;
