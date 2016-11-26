@@ -24,7 +24,9 @@
 #include <linux/regulator/krait-regulator.h>
 #include <linux/msm_tsens.h>
 #include <linux/msm_thermal.h>
+#ifdef CONFIG_ANDROID_RAM_CONSOLE
 #include <linux/persistent_ram.h>
+#endif
 #include <asm/mach/map.h>
 #include <asm/hardware/gic.h>
 #include <asm/mach/map.h>
