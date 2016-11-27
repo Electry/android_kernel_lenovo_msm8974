@@ -19,6 +19,9 @@
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/of_platform.h>
+#if defined(CONFIG_ANDROID_RAM_CONSOLE) || defined(CONFIG_KEXEC_HARDBOOT)
+#include <linux/memblock.h>
+#endif
 #include <linux/memory.h>
 #include <linux/regulator/machine.h>
 #include <linux/regulator/krait-regulator.h>
@@ -26,7 +29,6 @@
 #include <linux/msm_thermal.h>
 #ifdef CONFIG_ANDROID_RAM_CONSOLE
 #include <linux/persistent_ram.h>
-#include <linux/memblock.h>
 #endif
 #include <asm/mach/map.h>
 #include <asm/hardware/gic.h>
@@ -54,10 +56,11 @@
 #include "platsmp.h"
 #include "lenovo_nv.h"
 
-#ifdef CONFIG_ANDROID_RAM_CONSOLE
-
+#if defined(CONFIG_ANDROID_RAM_CONSOLE) || defined(CONFIG_KEXEC_HARDBOOT)
 #define PERSISTENT_RAM_SIZE	(SZ_1M)
+#endif
 
+#ifdef CONFIG_ANDROID_RAM_CONSOLE
 static struct persistent_ram_descriptor pram_desc = {
 	.name		= "ram_console",
 };
@@ -102,9 +105,14 @@ static struct reserve_info msm8974_reserve_info __initdata = {
 
 void __init msm_8974_reserve(void)
 {
-#ifdef CONFIG_ANDROID_RAM_CONSOLE
+#if defined(CONFIG_ANDROID_RAM_CONSOLE) || defined(CONFIG_KEXEC_HARDBOOT)
 	int retval;
+#endif
+#ifdef CONFIG_KEXEC_HARDBOOT
+	phys_addr_t start;
+#endif
 
+#ifdef CONFIG_ANDROID_RAM_CONSOLE
 	// Reserve space for ram_console at the end of last memory bank
 	persistent_ram.start = memblock_end_of_DRAM() - PERSISTENT_RAM_SIZE;
 	persistent_ram.size = PERSISTENT_RAM_SIZE;
@@ -123,6 +131,21 @@ void __init msm_8974_reserve(void)
 						+ persistent_ram.size;
 	}
 #endif
+
+#ifdef CONFIG_KEXEC_HARDBOOT
+	// Reserve space for hardboot page - just before ram_console
+	start = memblock_end_of_DRAM() - PERSISTENT_RAM_SIZE - SZ_1M;
+
+	retval = memblock_remove(start, SZ_1M);
+	if (retval) {
+		pr_err("%s: Failed to reserve memory for hardboot page at 0x%X!\n",
+			__func__, start);
+	} else {
+		pr_err("%s: Hardboot page reserved at 0x%x\n",
+			__func__, start);
+	}
+#endif /* CONFIG_KEXEC_HARDBOOT */
+
 	reserve_info = &msm8974_reserve_info;
 	of_scan_flat_dt(dt_scan_for_memory_reserve, msm8974_reserve_table);
 	msm_reserve();
