@@ -34,6 +34,9 @@ struct msm_camera_i2c_fn_t {
 		enum msm_camera_i2c_data_type);
 	int (*i2c_write_seq) (struct msm_camera_i2c_client *, uint32_t ,
 		uint8_t *, uint32_t);
+	int (*i2c_write_seq_ex) (struct msm_camera_i2c_client *, uint32_t ,
+		uint16_t *, uint32_t);
+	
 	int32_t (*i2c_write_table)(struct msm_camera_i2c_client *,
 		struct msm_camera_i2c_reg_setting *);
 	int32_t (*i2c_write_seq_table)(struct msm_camera_i2c_client *,
@@ -63,6 +66,9 @@ int32_t msm_camera_cci_i2c_write(struct msm_camera_i2c_client *client,
 
 int32_t msm_camera_cci_i2c_write_seq(struct msm_camera_i2c_client *client,
 	uint32_t addr, uint8_t *data, uint32_t num_byte);
+
+int32_t msm_camera_cci_i2c_write_seq_ex(struct msm_camera_i2c_client *client,
+	uint32_t addr, uint16_t *data, uint32_t num_byte);
 
 int32_t msm_camera_cci_i2c_write_table(
 	struct msm_camera_i2c_client *client,

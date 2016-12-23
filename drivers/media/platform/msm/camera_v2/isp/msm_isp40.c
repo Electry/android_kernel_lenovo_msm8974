@@ -368,9 +368,11 @@ static void msm_vfe40_process_reset_irq(struct vfe_device *vfe_dev,
 static void msm_vfe40_process_halt_irq(struct vfe_device *vfe_dev,
 	uint32_t irq_status0, uint32_t irq_status1)
 {
-    if (irq_status1 & (1 << 8)) {
-        msm_camera_io_w(0x0, vfe_dev->vfe_base + 0x2C0);
-    }
+#if 0 /* xujt1 Fix bus halt acknowledgement[case01593745]. 2014-06-27 */
+	if (irq_status1 & (1 << 8)) {
+		msm_camera_io_w(0x0, vfe_dev->vfe_base + 0x2C0);
+	}
+#endif
 }
 
 static void msm_vfe40_process_camif_irq(struct vfe_device *vfe_dev,

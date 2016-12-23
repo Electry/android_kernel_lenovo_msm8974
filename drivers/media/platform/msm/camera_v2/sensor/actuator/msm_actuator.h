@@ -41,7 +41,7 @@ struct msm_actuator_func_tbl {
 	int32_t (*actuator_init_step_table)(struct msm_actuator_ctrl_t *,
 		struct msm_actuator_set_info_t *);
 	int32_t (*actuator_init_focus)(struct msm_actuator_ctrl_t *,
-		uint16_t, struct reg_settings_t *);
+		uint16_t, enum msm_actuator_data_type, struct reg_settings_t *);
 	int32_t (*actuator_set_default_focus) (struct msm_actuator_ctrl_t *,
 			struct msm_actuator_move_params_t *);
 	int32_t (*actuator_move_focus) (struct msm_actuator_ctrl_t *,
@@ -53,6 +53,9 @@ struct msm_actuator_func_tbl {
 			struct damping_params_t *,
 			int8_t,
 			int16_t);
+	void (*actuator_lc_parse_i2c_params)(struct msm_actuator_ctrl_t *,
+			int16_t, uint16_t);
+	int32_t (*lc_actuator_init_focus)(struct msm_actuator_ctrl_t *);			
 	int32_t (*actuator_set_position)(struct msm_actuator_ctrl_t *,
 		struct msm_actuator_set_position_t *);
 };
@@ -101,6 +104,20 @@ struct msm_actuator_ctrl_t {
 	uint32_t subdev_id;
 	struct msm_actuator_vreg vreg_cfg;
 	enum msm_actuator_state_t actuator_state;
+};
+
+struct lc_reg_settings_t {
+	uint16_t reg_addr;
+	uint16_t reg_data;
+	enum msm_camera_i2c_data_type reg_data_type;
+};
+
+struct lc_cal_data {
+	uint8_t lc_bias;
+	uint8_t lc_offset;
+	uint16_t lc_infinity;
+	uint16_t lc_macro;
+	uint8_t readed;
 };
 
 #endif

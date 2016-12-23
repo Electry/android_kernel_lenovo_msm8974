@@ -262,6 +262,7 @@ enum cci_i2c_master_t {
 struct msm_camera_i2c_reg_array {
 	uint16_t reg_addr;
 	uint16_t reg_data;
+	uint16_t reg_data_type;
 	uint32_t delay;
 };
 
@@ -395,8 +396,20 @@ struct msm_camera_sensor_slave_info {
 	struct msm_sensor_init_params sensor_init_params;
 };
 
+struct msm_sensor_otp_params {
+	int customer_id;
+	int module_integrator_id;
+	int lens_id;
+	int rg_ratio;
+	int bg_ratio;
+	int user_data[2];
+	int light_rg;
+	int light_bg;
+};
+
 struct sensorb_cfg_data {
 	int cfgtype;
+	struct msm_sensor_otp_params *sensor_otp_params_ptr;
 	union {
 		struct msm_sensor_info_t      sensor_info;
 		struct msm_sensor_init_params sensor_init_params;
@@ -430,6 +443,7 @@ enum eeprom_cfg_type_t {
 
 struct eeprom_get_t {
 	uint32_t num_bytes;
+	uint8_t is_3a_checksumed;
 };
 
 struct eeprom_read_t {
@@ -486,16 +500,19 @@ enum msm_sensor_cfg_type_t {
 	CFG_SET_WHITE_BALANCE,
 	CFG_SET_AUTOFOCUS,
 	CFG_CANCEL_AUTOFOCUS,
+	CFG_SENSOR_OTP_PROC, // 25
+	CFG_SENSOR_GET_OTP,
+	CFG_WRITE_I2C_ARRAY_L, // add for byte or word i2c operation
 };
 
 enum msm_actuator_cfg_type_t {
 	CFG_GET_ACTUATOR_INFO,
 	CFG_SET_ACTUATOR_INFO,
 	CFG_SET_DEFAULT_FOCUS,
-	CFG_MOVE_FOCUS,
 	CFG_SET_POSITION,
-	CFG_ACTUATOR_POWERDOWN,
-	CFG_ACTUATOR_POWERUP,
+	CFG_MOVE_FOCUS,
+	CFG_SET_OIS_MODE,
+	CFG_SET_OIS_ENABLE,
 };
 
 enum actuator_type {
@@ -618,6 +635,8 @@ struct msm_actuator_cfg_data {
 		struct msm_actuator_get_info_t get_info;
 		struct msm_actuator_set_position_t setpos;
 		enum af_camera_name cam_name;
+		int cam_mode;
+		uint8_t ois_enable;
 	} cfg;
 };
 
