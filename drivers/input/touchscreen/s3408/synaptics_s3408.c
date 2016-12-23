@@ -94,6 +94,8 @@ enum device_status {
 
 #define RMI4_COORDS_ARR_SIZE 4
 
+#define GESTURE_BUTTON_DATA_OFFSET 27
+
 static int synaptics_rmi4_i2c_read(struct synaptics_rmi4_data *rmi4_data,
 		unsigned short addr, unsigned char *data,
 		unsigned short length);
@@ -117,6 +119,9 @@ static void __maybe_unused synaptics_rmi4_release_all(
 
 static int synaptics_rmi4_check_configuration(struct synaptics_rmi4_data
 		*rmi4_data);
+
+static int synaptics_rmi4_doze(struct synaptics_rmi4_data *rmi4_data,
+		bool active);
 
 static int synaptics_rmi4_suspend(struct device *dev);
 
@@ -157,6 +162,11 @@ static ssize_t synaptics_rmi4_flipy_show(struct device *dev,
 static ssize_t synaptics_rmi4_flipy_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t count);
 
+static ssize_t synaptics_rmi4_gesture_show(struct device *dev,
+		struct device_attribute *attr, char *buf);
+
+static ssize_t synaptics_rmi4_gesture_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count);
 
 struct synaptics_rmi4_f01_device_status {
 	union {
@@ -403,6 +413,9 @@ static struct device_attribute attrs[] = {
 	__ATTR(flipy, (S_IRUGO | S_IWUSR | S_IWGRP),
 			synaptics_rmi4_flipy_show,
 			synaptics_rmi4_flipy_store),
+	__ATTR(gesture, (S_IRUGO | S_IWUSR | S_IWGRP),
+			synaptics_rmi4_gesture_show,
+			synaptics_rmi4_gesture_store),
 };
 
 static bool exp_fn_inited;
@@ -640,6 +653,37 @@ static ssize_t synaptics_rmi4_flipy_store(struct device *dev,
 		return retval;
 
 	rmi4_data->flip_y = input > 0 ? 1 : 0;
+
+	return count;
+}
+
+static ssize_t synaptics_rmi4_gesture_show(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
+
+	return snprintf(buf, PAGE_SIZE, "%u\n",
+		rmi4_data->gesture_enabled);
+}
+
+static ssize_t synaptics_rmi4_gesture_store(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t count)
+{
+	int retval;
+	unsigned int input;
+	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
+
+	retval = kstrtouint(buf, 10, &input);
+	if (retval)
+		return retval;
+
+	rmi4_data->gesture_enabled = input > 0 ? 1 : 0;
+
+	if (rmi4_data->gesture_enabled) {
+		enable_irq_wake(rmi4_data->irq);
+	} else {
+		disable_irq_wake(rmi4_data->irq);
+	}
 
 	return count;
 }
@@ -965,6 +1009,60 @@ static void synaptics_rmi4_f1a_report(struct synaptics_rmi4_data *rmi4_data,
 	static bool before_2d_status[MAX_NUMBER_OF_BUTTONS];
 	static bool while_2d_status[MAX_NUMBER_OF_BUTTONS];
 #endif
+	unsigned char button_type;
+
+	if (atomic_read(&rmi4_data->gesture_active)) {
+		retval = synaptics_rmi4_i2c_read(rmi4_data,
+				rmi4_data->f51_data_base_addr
+					+ GESTURE_BUTTON_DATA_OFFSET,
+				&button_type,
+				sizeof(button_type));
+		if (retval < 0) {
+			dev_err(&rmi4_data->i2c_client->dev,
+				"Failed to read button type!\n");
+			synaptics_rmi4_doze(rmi4_data, true);
+			return;
+		}
+
+		switch (button_type) {
+			case 1: // MENU
+				dev_err(&rmi4_data->i2c_client->dev,
+					"Double tap on menu detected\n");
+
+				input_report_key(rmi4_data->input_dev, KEY_WAKEUP, 1);
+				input_sync(rmi4_data->input_dev);
+				input_report_key(rmi4_data->input_dev, KEY_WAKEUP, 0);
+				input_sync(rmi4_data->input_dev);
+
+				break;
+			case 2: // HOME
+				dev_err(&rmi4_data->i2c_client->dev,
+					"Double tap on home detected\n");
+
+				input_report_key(rmi4_data->input_dev, KEY_WAKEUP, 1);
+				input_sync(rmi4_data->input_dev);
+				input_report_key(rmi4_data->input_dev, KEY_WAKEUP, 0);
+				input_sync(rmi4_data->input_dev);
+
+				break;
+			case 4: // BACK
+				dev_err(&rmi4_data->i2c_client->dev,
+					"Double tap on back detected\n");
+
+				input_report_key(rmi4_data->input_dev, KEY_WAKEUP, 1);
+				input_sync(rmi4_data->input_dev);
+				input_report_key(rmi4_data->input_dev, KEY_WAKEUP, 0);
+				input_sync(rmi4_data->input_dev);
+
+				break;
+			default:
+				dev_err(&rmi4_data->i2c_client->dev,
+					"Unknown button type detected, "
+					"button_type=%d\n", button_type);
+				return;
+		}
+		return;
+	}
 
 	if (do_once) {
 		memset(current_status, 0, sizeof(current_status));
@@ -1392,6 +1490,7 @@ static int synaptics_rmi4_f12_init(struct synaptics_rmi4_data *rmi4_data,
 	unsigned char size_of_2d_data;
 	unsigned char size_of_query8;
 	unsigned char ctrl_8_offset;
+	unsigned char ctrl_20_offset;
 	unsigned char ctrl_23_offset;
 	unsigned char ctrl_28_offset;
 	unsigned char num_of_fingers;
@@ -1427,7 +1526,7 @@ static int synaptics_rmi4_f12_init(struct synaptics_rmi4_data *rmi4_data,
 			query_5.ctrl6_is_present +
 			query_5.ctrl7_is_present;
 
-	ctrl_23_offset = ctrl_8_offset +
+	ctrl_20_offset = ctrl_8_offset +
 			query_5.ctrl8_is_present +
 			query_5.ctrl9_is_present +
 			query_5.ctrl10_is_present +
@@ -1439,7 +1538,9 @@ static int synaptics_rmi4_f12_init(struct synaptics_rmi4_data *rmi4_data,
 			query_5.ctrl16_is_present +
 			query_5.ctrl17_is_present +
 			query_5.ctrl18_is_present +
-			query_5.ctrl19_is_present +
+			query_5.ctrl19_is_present;
+
+	ctrl_23_offset = ctrl_20_offset +
 			query_5.ctrl20_is_present +
 			query_5.ctrl21_is_present +
 			query_5.ctrl22_is_present;
@@ -1450,6 +1551,9 @@ static int synaptics_rmi4_f12_init(struct synaptics_rmi4_data *rmi4_data,
 			query_5.ctrl25_is_present +
 			query_5.ctrl26_is_present +
 			query_5.ctrl27_is_present;
+
+	rmi4_data->f12_ctrl_20_addr =
+		fhandler->full_addr.ctrl_base + ctrl_20_offset;
 
 	retval = synaptics_rmi4_i2c_read(rmi4_data,
 			fhandler->full_addr.ctrl_base + ctrl_23_offset,
@@ -1940,6 +2044,11 @@ static int synaptics_rmi4_query_device(struct synaptics_rmi4_data *rmi4_data)
 						fhandler, &rmi_fd, intr_count);
 				if (retval < 0)
 					return retval;
+				break;
+
+			case SYNAPTICS_RMI4_F51:
+				rmi4_data->f51_data_base_addr =
+						page_number << 8 | rmi_fd.data_base_addr;
 				break;
 
 			case SYNAPTICS_RMI4_F1A:
@@ -2628,6 +2737,11 @@ static int synaptics_rmi4_probe(struct i2c_client *client,
 	rmi4_data->fw_updating = false;
 	rmi4_data->suspended = false;
 
+	rmi4_data->gesture_enabled = false;
+	atomic_set(&rmi4_data->gesture_active, 0);
+
+	input_set_capability(rmi4_data->input_dev, EV_KEY, KEY_WAKEUP);
+
 	rmi4_data->i2c_read = synaptics_rmi4_i2c_read;
 	rmi4_data->i2c_write = synaptics_rmi4_i2c_write;
 	rmi4_data->irq_enable = synaptics_rmi4_irq_enable;
@@ -3265,6 +3379,65 @@ static int synaptics_rmi4_check_configuration(struct synaptics_rmi4_data
 	return 0;
 }
 
+static int synaptics_rmi4_doze(struct synaptics_rmi4_data *rmi4_data,
+						bool active)
+{
+	unsigned char on[3] = {0x01, 0x01, 0x02};
+	unsigned char off[3] = {0x01, 0x01, 0x00};
+	unsigned char intr_status[MAX_INTR_REGISTERS];
+	int retval = 0;
+
+	if (active) {
+		dev_err(&(rmi4_data->input_dev->dev),
+			"%s: Entering doze mode\n", __func__);
+
+		/* Clear interrupts first */
+		retval = synaptics_rmi4_i2c_read(rmi4_data,
+				rmi4_data->f01_data_base_addr + 1,
+				intr_status,
+				rmi4_data->num_of_intr_regs);
+		if (retval < 0) {
+			dev_err(&(rmi4_data->input_dev->dev),
+				"%s: Failed to clear interrupts\n",
+				__func__);
+			return retval;
+		}
+
+		retval = synaptics_rmi4_i2c_write(rmi4_data,
+				rmi4_data->f12_ctrl_20_addr,
+				on,
+				sizeof(on));
+		if (retval < 0) {
+			dev_err(&(rmi4_data->input_dev->dev),
+				"%s: Failed to enter doze mode\n",
+				__func__);
+			return retval;
+		}
+
+		atomic_set(&rmi4_data->gesture_active, 1);
+	} else {
+		dev_err(&(rmi4_data->input_dev->dev),
+			"%s: Exiting doze mode\n", __func__);
+
+		synaptics_rmi4_release_all(rmi4_data);
+
+		retval = synaptics_rmi4_i2c_write(rmi4_data,
+				rmi4_data->f12_ctrl_20_addr,
+				off,
+				sizeof(off));
+		if (retval < 0) {
+			dev_err(&(rmi4_data->input_dev->dev),
+				"%s: Failed to exit doze mode\n",
+				__func__);
+			return retval;
+		}
+
+		atomic_set(&rmi4_data->gesture_active, 0);
+	}
+
+	return retval;
+}
+
  /**
  * synaptics_rmi4_suspend()
  *
@@ -3279,6 +3452,9 @@ static int synaptics_rmi4_suspend(struct device *dev)
 {
 	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
 	int retval;
+
+	if (rmi4_data->gesture_enabled)
+		return synaptics_rmi4_doze(rmi4_data, true);
 
 	if (rmi4_data->stay_awake) {
 		rmi4_data->staying_awake = true;
@@ -3350,6 +3526,9 @@ static int synaptics_rmi4_resume(struct device *dev)
 {
 	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
 	int retval;
+
+	if (rmi4_data->gesture_enabled)
+		return synaptics_rmi4_doze(rmi4_data, false);
 
 	if (rmi4_data->staying_awake)
 		return 0;

@@ -45,6 +45,7 @@
 #define SYNAPTICS_RMI4_F12 (0x12)
 #define SYNAPTICS_RMI4_F1A (0x1a)
 #define SYNAPTICS_RMI4_F34 (0x34)
+#define SYNAPTICS_RMI4_F51 (0x51)
 #define SYNAPTICS_RMI4_F54 (0x54)
 #define SYNAPTICS_RMI4_F55 (0x55)
 
@@ -230,6 +231,8 @@ struct synaptics_rmi4_data {
 	unsigned short f01_cmd_base_addr;
 	unsigned short f01_ctrl_base_addr;
 	unsigned short f01_data_base_addr;
+	unsigned short f12_ctrl_20_addr;
+	unsigned short f51_data_base_addr;
 	int irq;
 	int sensor_max_x;
 	int sensor_max_y;
@@ -248,6 +251,8 @@ struct synaptics_rmi4_data {
 	wait_queue_head_t wait;
 	bool stay_awake;
 	bool staying_awake;
+	bool gesture_enabled;
+	atomic_t gesture_active;
 	int (*i2c_read)(struct synaptics_rmi4_data *pdata, unsigned short addr,
 			unsigned char *data, unsigned short length);
 	int (*i2c_write)(struct synaptics_rmi4_data *pdata, unsigned short addr,
